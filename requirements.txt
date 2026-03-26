@@ -1,0 +1,27 @@
+# Requirements pour OCR Identity Extractor V2
+
+# FastAPI et serveur
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.18
+
+# OCR - Versions stables et testées
+paddleocr==2.7.3
+paddlepaddle==2.6.2
+
+# Traitement d'images - compatibles avec PaddleOCR 2.7.3
+opencv-python==4.6.0.66
+Pillow==10.4.0
+numpy==1.24.4
+
+# Utilitaires
+python-dateutil==2.8.2
+smbprotocol==1.13.0
+
+# Logging
+colorlog==6.8.0
+
+# Optionnel : pour améliorer encore plus la précision
+# pytesseract==0.3.10  # OCR alternatif
+# easyocr==1.7.0  # OCR alternatif pour ensemble
+mrz==0.6.1  # Parser MRZ dédié

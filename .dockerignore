@@ -1,36 +1,70 @@
-# .dockerignore - Fichiers à exclure du contexte Docker
+# .dockerignore - Exclure TOUS les fichiers non essentiels
 
-# Python
+# TOUT PAR DÉFAUT (sauf les fichiers listés dans .gitignore)
+# ============================================================
+
+# Exclusions très larges
+**/
+
+# Mais INCLURE les fichiers essentiels
+!main_v2.py
+!id_processor_v2.py
+!document_strategy.py
+!document_types.py
+!document_detector.py
+!ocr_processor.py
+!validator.py
+!mrz_parser.py
+!cin_layouts.py
+!requirements.txt
+!Dockerfile
+!.dockerignore
+!README.md
+
+# Logs et cache
+logs/
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
+.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+.cache/
 
 # Tests
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
-.hypothesis/
+test_*.py
+*_test.py
+batch_test_*.py
+quick_test_*.py
+audit_ocr_only_dates.py
+check_service.py
+test_mrz_improvements.py
+test_redeploy.py
+test_images/
+test-docker.sh
+
+# Résultats et données
+*.csv
+*.jsonl
+batch_results*.csv
+batch_results*.jsonl
+ocr_only_date_audit*.json
+response.json
+oracle_extraction_updated.sql
+test_oracle_request.sql
+
+# Documentation (sauf README)
+docs/
+DETAILED_CHANGES.md
+DOCUMENTATION_*.md
+GUIDE_*.md
+IMPROVEMENTS_SUMMARY.md
+INSTRUCTIONS.md
+RUNBOOK_PRODUCTION.md
+SYNTHESE_2PAGES.md
+TESTING_GUIDE.md
+BUILD_STATUS.md
+DOCKER_GUIDE.md
+SOLUTION_DATE_EXTRACTION.md
 
 # IDE
 .vscode/
@@ -42,12 +76,27 @@ htmlcov/
 
 # Git
 .git/
+.github/
 .gitignore
 .gitattributes
 
-# Docker
-Dockerfile
+# Dépendances Python
+.venv/
+venv/
+ENV/
+env/
+
+# Environnement
+.env
+.env.local
+
+# Scripts auxiliaires
+get-docker.sh
+Makefile
+nginx.conf
+scripts/
 docker-compose.yml
+
 .dockerignore
 
 # Documentation

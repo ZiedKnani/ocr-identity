@@ -67,6 +67,38 @@ class DocumentStrategy:
         return re.sub(r"[^A-Z0-9]", "", value.upper())
 
     @staticmethod
+    def _is_plausible_person_name(value: str, forbidden_tokens: set = None) -> bool:
+        """Vérifie qu'une valeur ressemble à un nom/prénom humain et non à un artefact OCR/MRZ."""
+        if not isinstance(value, str):
+            return False
+
+        raw = value.strip().upper()
+        if len(raw) < 2 or len(raw) > 40:
+            return False
+
+        # Les noms ne doivent pas contenir de chiffres ni de séparateurs MRZ.
+        if any(ch.isdigit() for ch in raw):
+            return False
+        if '<' in raw or '/' in raw or '\\' in raw:
+            return False
+
+        compact = re.sub(r"[^A-Z]", "", raw)
+        if len(compact) < 2:
+            return False
+
+        # Rejeter les textes majoritairement non alphabétiques.
+        alpha_ratio = len(compact) / max(len(raw.replace(" ", "")), 1)
+        if alpha_ratio < 0.75:
+            return False
+
+        if forbidden_tokens:
+            tokens = set(re.findall(r"[A-Z]+", raw))
+            if tokens & forbidden_tokens:
+                return False
+
+        return True
+
+    @staticmethod
     def _compute_blocks_extent(blocks: List[Dict[str, Any]]) -> Tuple[float, float, float, float]:
         """Calcule les bornes globales (min_x, min_y, max_x, max_y) des bbox OCR."""
         xs = []
@@ -264,14 +296,47 @@ class DocumentStrategy:
         dates_found = []
 
         month_map = {
+            # EN
             'JAN': '01', 'FEB': '02', 'MAR': '03', 'APR': '04', 'MAY': '05', 'JUN': '06',
-            'JUL': '07', 'AUG': '08', 'SEP': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12',
-            # Variantes FR courantes OCR
-            'AVR': '04', 'MAI': '05', 'JUI': '06', 'AOU': '08', 'DEC': '12'
+            'JUL': '07', 'AUG': '08', 'SEP': '09', 'SEPT': '09', 'OCT': '10', 'NOV': '11', 'DEC': '12',
+            # FR
+            'JANV': '01', 'FEV': '02', 'FEVR': '02', 'MARS': '03', 'AVR': '04', 'MAI': '05',
+            'JUIN': '06', 'JUIL': '07', 'AOUT': '08', 'SEPTEMBRE': '09', 'OCTOBRE': '10',
+            'NOVEMBRE': '11', 'DECEMBRE': '12',
         }
+
+        def _resolve_month_number(token: str) -> str:
+            """Résout un mois OCR sans règles spécifiques au dataset."""
+            if not token:
+                return ""
+
+            # Normalisation OCR générique: chiffres souvent confondus avec lettres.
+            cleaned = re.sub(r'[^A-Z0-9]', '', token.upper())
+            cleaned = (
+                cleaned
+                .replace('0', 'O')
+                .replace('1', 'I')
+                .replace('5', 'S')
+            )
+
+            if cleaned in month_map:
+                return month_map[cleaned]
+
+            # Fallback générique par préfixe (>= 3) pour capter les mois tronqués OCR.
+            if len(cleaned) >= 3:
+                candidates = [v for k, v in month_map.items() if k.startswith(cleaned) or cleaned.startswith(k)]
+                if candidates:
+                    # Dédupliquer tout en conservant l'ordre.
+                    unique = list(dict.fromkeys(candidates))
+                    if len(unique) == 1:
+                        return unique[0]
+
+            return ""
 
         def _append_date(day: int, month: int, year: int, conf: float, block_id: int) -> bool:
             try:
+                if year < 100:
+                    year = _normalize_two_digit_year(year)
                 date_obj = datetime(year, month, day)
                 dates_found.append({
                     "value": f"{day:02d}/{month:02d}/{year}",
@@ -282,15 +347,21 @@ class DocumentStrategy:
                 return True
             except ValueError:
                 return False
+
+        def _normalize_two_digit_year(year_2d: int) -> int:
+            # Heuristique stable pour documents d'identite:
+            # 00-29 -> 2000-2029, 30-99 -> 1930-1999.
+            return 2000 + year_2d if year_2d <= 29 else 1900 + year_2d
         
         for block in blocks:
             text = block["text"]
             conf = block.get("confidence", 0.8)
             block_id = block.get("id", -1)
-            text_upper = text.upper().replace('O', '0')
+            text_upper_raw = text.upper()
+            text_upper_num = text_upper_raw.replace('O', '0')
 
             # Chercher format MM/DD/YYYY ou DD/MM/YYYY
-            date_matches = re.findall(r'(\d{1,2})/(\d{1,2})/(\d{4})', text)
+            date_matches = re.findall(r'(\d{1,2})/(\d{1,2})/(\d{4})', text_upper_num)
             
             for match in date_matches:
                 month_or_day1, day_or_month2, year = match
@@ -303,25 +374,59 @@ class DocumentStrategy:
                 # Fallback format US MM/DD/YYYY.
                 _append_date(d2, m1, y, conf, block_id)
 
+            # Format DD/MM/YY ou MM/DD/YY (OCR tronque souvent l'annee)
+            short_year_matches = re.findall(r'\b(\d{1,2})/(\d{1,2})/(\d{2})\b', text_upper_num)
+            for a, b, yy in short_year_matches:
+                d1, d2, y2 = int(a), int(b), _normalize_two_digit_year(int(yy))
+
+                if _append_date(d1, d2, y2, conf, block_id):
+                    continue
+
+                _append_date(d2, d1, y2, conf, block_id)
+
             # OCR bruité fréquent: DD/MMYYYY (ex: 12/012023)
-            noisy_matches = re.findall(r'\b(\d{1,2})[\./-](\d{2})((?:19|20)\d{2})\b', text_upper)
+            noisy_matches = re.findall(r'\b(\d{1,2})[\./-](\d{2})((?:19|20)\d{2})\b', text_upper_num)
             for day, month, year in noisy_matches:
                 _append_date(int(day), int(month), int(year), conf, block_id)
 
+            # OCR très bruité: DD/MMY... avec chiffre parasite avant l'annee
+            # Ex: 16/0911983 -> day=16, month=09, year=1983 (on garde les 4 derniers chiffres)
+            noisy_year_tail_matches = re.findall(r'\b(\d{1,2})[\./-](\d{2})(\d{4,5})\b', text_upper_num)
+            for day, month, year_tail in noisy_year_tail_matches:
+                year = int(year_tail[-4:])
+                _append_date(int(day), int(month), year, conf, block_id)
+
             # Format compact DDMMYYYY
-            for compact in re.findall(r'\b(\d{2})(\d{2})((?:19|20)\d{2})\b', text_upper):
+            for compact in re.findall(r'\b(\d{2})(\d{2})((?:19|20)\d{2})\b', text_upper_num):
                 day, month, year = compact
                 _append_date(int(day), int(month), int(year), conf, block_id)
 
-            # Format mois texte: 14JAN/JAN2033, 14JAN2033, 14 JAN 2033, 14.MAY 2029
-            for m in re.finditer(r'(\d{1,2})\s*[\.-]?\s*([A-Z]{3})\s*/?\s*[A-Z0-9]{0,10}\s*((?:19|20)\d{2})', text_upper):
-                day, mon_abbr, year = m.groups()
-                month_num = month_map.get(mon_abbr)
+            # Format mois texte: 14JAN/JAN2033, 14JAN2033, 14 JAN 2033, 14.MAY 2029,
+            # mais aussi années OCR sur 2 chiffres (ex: 23SEPT/SEP25).
+            for m in re.finditer(r'(\d{1,2})\s*[\.-]?\s*([A-Z0-9]{2,5})\s*/?\s*[A-Z0-9]{0,10}\s*((?:(?:19|20)\d{2})|(?:\d{2}))\b', text_upper_raw):
+                day, mon_abbr, year_raw = m.groups()
+                month_num = _resolve_month_number(mon_abbr)
                 if month_num:
-                    _append_date(int(day), int(month_num), int(year), conf, block_id)
+                    if len(year_raw) == 2:
+                        year = _normalize_two_digit_year(int(year_raw))
+                    else:
+                        year = int(year_raw)
+                    _append_date(int(day), int(month_num), year, conf, block_id)
+
+            # Format abrégé sans séparateur: 21OCT26, 07JUN24, 03AOUT21.
+            for m in re.finditer(r'\b(\d{1,2})([A-Z0-9]{3,5})(\d{2,4})\b', text_upper_raw):
+                day, mon_abbr, year_raw = m.groups()
+                month_num = _resolve_month_number(mon_abbr)
+                if not month_num:
+                    continue
+                if len(year_raw) == 2:
+                    year = _normalize_two_digit_year(int(year_raw))
+                else:
+                    year = int(year_raw)
+                _append_date(int(day), int(month_num), year, conf, block_id)
 
             # Format MMYYYY ou MM/YYYY (utile pour dates délivrance/expiration)
-            for m in re.finditer(r'\b(0[1-9]|1[0-2])\s*/?\s*((?:19|20)\d{2})\b', text_upper):
+            for m in re.finditer(r'\b(0[1-9]|1[0-2])\s*/?\s*((?:19|20)\d{2})\b', text_upper_num):
                 month, year = m.groups()
                 _append_date(1, int(month), int(year), conf, block_id)
         
@@ -374,49 +479,88 @@ class DocumentStrategy:
         if not remaining_dates:
             return extracted
         
-        # Remplir seulement les champs vides
-        if len(remaining_dates) == 1 and not has_naissance:
-            extracted['date_naissance'] = {
-                "value": remaining_dates[0]["value"],
-                "confidence": remaining_dates[0]["confidence"],
-                "method": "chronology_single"
+        missing_fields = [
+            field for field in ['date_naissance', 'date_delivrance', 'date_expiration']
+            if not DocumentStrategy._has_non_empty_value(extracted, field)
+        ]
+
+        birth_anchor = DocumentStrategy._parse_ddmmyyyy(
+            extracted.get('date_naissance', {}).get('value', '')
+        ) if DocumentStrategy._has_non_empty_value(extracted, 'date_naissance') else None
+        delivery_anchor = DocumentStrategy._parse_ddmmyyyy(
+            extracted.get('date_delivrance', {}).get('value', '')
+        ) if DocumentStrategy._has_non_empty_value(extracted, 'date_delivrance') else None
+        expiration_anchor = DocumentStrategy._parse_ddmmyyyy(
+            extracted.get('date_expiration', {}).get('value', '')
+        ) if DocumentStrategy._has_non_empty_value(extracted, 'date_expiration') else None
+
+        def _set_field(field: str, date_item: Dict[str, Any], method: str) -> None:
+            extracted[field] = {
+                "value": date_item["value"],
+                "confidence": date_item.get("confidence", 0.8),
+                "method": method,
             }
-        
-        elif len(remaining_dates) == 2:
-            # 2 dates: ancienne=naissance, récente=expiration
-            if not has_naissance:
-                extracted['date_naissance'] = {
-                    "value": remaining_dates[0]["value"],
-                    "confidence": remaining_dates[0]["confidence"],
-                    "method": "chronology_oldest"
-                }
-            if not has_expiration:
-                extracted['date_expiration'] = {
-                    "value": remaining_dates[1]["value"],
-                    "confidence": remaining_dates[1]["confidence"],
-                    "method": "chronology_newest"
-                }
-        
+
+        # Cas 1: un seul champ manquant -> choisir intelligemment selon le champ.
+        if len(missing_fields) == 1 and remaining_dates:
+            target = missing_fields[0]
+
+            if target == 'date_naissance':
+                _set_field(target, remaining_dates[0], "chronology_single_oldest")
+            elif target == 'date_expiration':
+                _set_field(target, remaining_dates[-1], "chronology_single_newest")
+            else:
+                # date_delivrance manquante: privilégier une date entre naissance et expiration si possible.
+                between = [
+                    d for d in remaining_dates
+                    if (birth_anchor is None or d['date_obj'] >= birth_anchor)
+                    and (expiration_anchor is None or d['date_obj'] <= expiration_anchor)
+                ]
+                chosen = between[0] if between else remaining_dates[min(1, len(remaining_dates) - 1)]
+                _set_field(target, chosen, "chronology_single_middle")
+
+        # Cas 2: deux champs manquants -> utiliser les ancres existantes pour limiter les inversions.
+        elif len(missing_fields) == 2 and remaining_dates:
+            missing_set = set(missing_fields)
+
+            if missing_set == {'date_delivrance', 'date_expiration'}:
+                candidates = [d for d in remaining_dates if birth_anchor is None or d['date_obj'] >= birth_anchor]
+                if not candidates:
+                    candidates = remaining_dates
+                _set_field('date_delivrance', candidates[0], "chronology_pair_delivery")
+                _set_field('date_expiration', candidates[-1], "chronology_pair_expiration")
+
+            elif missing_set == {'date_naissance', 'date_delivrance'}:
+                candidates = [d for d in remaining_dates if expiration_anchor is None or d['date_obj'] <= expiration_anchor]
+                if not candidates:
+                    candidates = remaining_dates
+                _set_field('date_naissance', candidates[0], "chronology_pair_birth")
+                _set_field('date_delivrance', candidates[-1], "chronology_pair_delivery")
+
+            else:
+                # naissance + expiration manquantes
+                _set_field('date_naissance', remaining_dates[0], "chronology_pair_birth")
+                _set_field('date_expiration', remaining_dates[-1], "chronology_pair_expiration")
+
+        # Cas 3: trois champs manquants ou plus de dates disponibles.
         elif len(remaining_dates) >= 3:
-            # 3+ dates: ancienne=naissance, milieu=delivrance, récente=expiration
             if not has_naissance:
-                extracted['date_naissance'] = {
-                    "value": remaining_dates[0]["value"],
-                    "confidence": remaining_dates[0]["confidence"],
-                    "method": "chronology_oldest"
-                }
+                _set_field('date_naissance', remaining_dates[0], "chronology_oldest")
             if not has_delivrance:
-                extracted['date_delivrance'] = {
-                    "value": remaining_dates[1]["value"],
-                    "confidence": remaining_dates[1]["confidence"],
-                    "method": "chronology_middle"
-                }
+                # Prendre une date intermédiaire stable même si plus de 3 dates existent.
+                mid_index = len(remaining_dates) // 2
+                _set_field('date_delivrance', remaining_dates[mid_index], "chronology_middle")
             if not has_expiration:
-                extracted['date_expiration'] = {
-                    "value": remaining_dates[-1]["value"],
-                    "confidence": remaining_dates[-1]["confidence"],
-                    "method": "chronology_newest"
-                }
+                _set_field('date_expiration', remaining_dates[-1], "chronology_newest")
+
+        # Cas 4: fallback minimal quand il reste des dates mais logique précédente non déclenchée.
+        elif remaining_dates:
+            if not has_naissance:
+                _set_field('date_naissance', remaining_dates[0], "chronology_fallback")
+            if not has_delivrance and len(remaining_dates) >= 2:
+                _set_field('date_delivrance', remaining_dates[0], "chronology_fallback")
+            if not has_expiration:
+                _set_field('date_expiration', remaining_dates[-1], "chronology_fallback")
 
         return DocumentStrategy._enforce_date_consistency(extracted, blocks)
 
@@ -858,6 +1002,13 @@ class DocumentStrategy:
             "SIGNATURE", "SIGNATURA", "HOLDER", "TITULAIRE",
             "PP", "CAN", "OIAUC", "66", "siver", "enom", "06"
         ]
+
+        # Marqueurs non nominaux observés dans les zones signalétiques.
+        non_name_markers = {
+            "YEUX", "NOIR", "NOIRS", "TAILLE", "HEIGHT", "SIGNES", "PARTICULIERS",
+            "DOMICILE", "ADDRESS", "HOLDER", "SIGNATURE", "TITULAIRE", "GUINEENNE", "GUINEEN"
+        }
+        forbidden_name_tokens = set(t.upper() for t in excluded_terms) | non_name_markers
         
         used_blocks = set()
         high_conf_blocks = [b for b in blocks if b["confidence"] > 0.9]
@@ -870,6 +1021,13 @@ class DocumentStrategy:
             mrz_data = MRZParser.parse_td3(mrz_lines[0], mrz_lines[1])
             if mrz_data:
                 extracted.update(mrz_data)
+
+                # Sanity check: rejeter immédiatement les noms/prénoms MRZ aberrants.
+                for name_field in ("nom", "prenom"):
+                    if name_field in extracted:
+                        name_value = str(extracted[name_field].get("value", ""))
+                        if not DocumentStrategy._is_plausible_person_name(name_value, forbidden_name_tokens):
+                            extracted.pop(name_field, None)
 
                 # Ajouter dynamiquement les codes pays MRZ aux termes exclus des noms.
                 for code_key in ("code_pays", "code_pays_emetteur"):
@@ -930,9 +1088,49 @@ class DocumentStrategy:
         if 'numero_passeport' not in extracted:
             for block in sorted(blocks, key=lambda b: b.get("confidence", 0), reverse=True):
                 text = block["text"].upper()
+
+                # Format MRZ compact TD3 generique (sans '<' visibles)
+                # Exemple: P13756AA0CAN9008010F3301144
+                # Structure: [doc_number][check][country][dob][check][sex][expiry]
+                mrz_compact_match = re.search(r'\b([A-Z0-9]{6,9})(\d)([A-Z]{3})(\d{6})(\d)([MF<])(\d{6})', text)
+                if mrz_compact_match:
+                    doc_number_raw = mrz_compact_match.group(1)
+                    doc_number = re.sub(r'[^A-Z0-9]', '', doc_number_raw).replace('<', '')
+                    if 6 <= len(doc_number) <= 9:
+                        extracted['numero_passeport'] = {
+                            "value": doc_number,
+                            "confidence": round(block["confidence"], 2),
+                            "method": "mrz_compact"
+                        }
+
+                        # Bonus: code pays/nationalite si absents
+                        country_code = mrz_compact_match.group(3)
+                        if 'code_pays' not in extracted:
+                            extracted['code_pays'] = {
+                                "value": country_code,
+                                "confidence": round(block["confidence"], 2),
+                                "method": "mrz_compact"
+                            }
+                        if 'nationalite' not in extracted:
+                            extracted['nationalite'] = {
+                                "value": country_code,
+                                "confidence": round(block["confidence"], 2),
+                                "method": "mrz_compact"
+                            }
+
+                        # Bonus: sexe si absent
+                        if 'sexe' not in extracted and mrz_compact_match.group(6) in ['M', 'F']:
+                            extracted['sexe'] = {
+                                "value": mrz_compact_match.group(6),
+                                "confidence": round(block["confidence"], 2),
+                                "method": "mrz_compact"
+                            }
+
+                        used_blocks.add(block["id"])
+                        break
                 
-                # Format canadien: P123456AA (1 lettre + 6-7 chiffres + 2 lettres)
-                canadian_match = re.search(r'\b([A-Z]\d{6,7}[A-Z]{2})\b', text)
+                # Format alphanumerique usuel: 1 lettre + 5-7 chiffres + 2 lettres
+                canadian_match = re.search(r'\b([A-Z]\d{5,7}[A-Z]{2})\b', text)
                 if canadian_match:
                     extracted['numero_passeport'] = {
                         "value": canadian_match.group(1),
@@ -987,6 +1185,20 @@ class DocumentStrategy:
                     }
                     used_blocks.add(block["id"])
                     break
+
+        # Fallback nationalite: reutiliser code_pays/code_pays_emetteur si nationalite absente
+        if 'nationalite' not in extracted:
+            for code_key in ('code_pays', 'code_pays_emetteur'):
+                code_data = extracted.get(code_key)
+                if isinstance(code_data, dict):
+                    code_val = str(code_data.get('value', '')).strip().upper()
+                    if re.match(r'^[A-Z]{3}$', code_val):
+                        extracted['nationalite'] = {
+                            "value": code_val,
+                            "confidence": code_data.get('confidence', 0.9),
+                            "method": "derived_country_code"
+                        }
+                        break
         
         # ============================================================
         # 3. EXTRAIRE LE NOM (SURNAME)
@@ -1004,7 +1216,8 @@ class DocumentStrategy:
                         candidate = blocks[j]["text"].upper().strip()
                         if (blocks[j]["confidence"] > 0.85 and
                             re.match(r'^[A-Z]{2,}$', candidate) and
-                            candidate not in excluded_terms):
+                            candidate not in excluded_terms and
+                            DocumentStrategy._is_plausible_person_name(candidate, forbidden_name_tokens)):
                             extracted['nom'] = {
                                 "value": candidate,
                                 "confidence": round(blocks[j]["confidence"], 2),
@@ -1018,6 +1231,54 @@ class DocumentStrategy:
         # ============================================================
         # 4. EXTRAIRE LE PRÉNOM (GIVEN NAME)
         # ============================================================
+        # Heuristique générique: si nom+prénom absents, utiliser une paire de blocs
+        # adjacents (souvent NOM puis PRENOM sur passeports), pour éviter que
+        # direct_match prenne le NOM comme PRENOM.
+        if 'nom' not in extracted and 'prenom' not in extracted:
+            name_candidates = []
+            for block in blocks:
+                txt = block["text"].strip().upper()
+                if (
+                    block.get("confidence", 0) >= 0.9
+                    and re.match(r'^[A-Z]{3,20}$', txt)
+                    and txt not in excluded_terms
+                    and DocumentStrategy._is_plausible_person_name(txt, forbidden_name_tokens)
+                ):
+                    bbox = block.get("bbox") or []
+                    if bbox and len(bbox) >= 4:
+                        y = bbox[0][1]
+                        x = bbox[0][0]
+                    else:
+                        y = 10**9
+                        x = 10**9
+                    name_candidates.append((y, x, block))
+
+            name_candidates.sort(key=lambda item: (item[0], item[1]))
+
+            for i in range(len(name_candidates) - 1):
+                y1, x1, b1 = name_candidates[i]
+                y2, x2, b2 = name_candidates[i + 1]
+
+                # Blocs proches verticalement avec ordre de lecture naturel.
+                if y2 >= y1 and abs(y2 - y1) <= 90:
+                    nom_candidate = b1["text"].strip().upper()
+                    prenom_candidate = b2["text"].strip().upper()
+
+                    if nom_candidate != prenom_candidate:
+                        extracted['nom'] = {
+                            "value": nom_candidate,
+                            "confidence": round(b1.get("confidence", 0), 2),
+                            "method": "adjacent_name_pair"
+                        }
+                        extracted['prenom'] = {
+                            "value": prenom_candidate,
+                            "confidence": round(b2.get("confidence", 0), 2),
+                            "method": "adjacent_name_pair"
+                        }
+                        used_blocks.add(b1["id"])
+                        used_blocks.add(b2["id"])
+                        break
+
         if 'prenom' not in extracted:
             # Méthode 1: Chercher après le label "Given names"
             for i, block in enumerate(blocks):
@@ -1032,6 +1293,7 @@ class DocumentStrategy:
                         if (re.match(r'^[A-Z]{3,8}$', candidate) and
                             blocks[j]["confidence"] > 0.85 and
                             candidate not in excluded_terms and
+                            DocumentStrategy._is_plausible_person_name(candidate, forbidden_name_tokens) and
                             candidate != extracted.get('nom', {}).get('value')):
                             extracted['prenom'] = {
                                 "value": candidate,
@@ -1065,6 +1327,7 @@ class DocumentStrategy:
                                 if (re.match(r'^[A-Z]{3,8}$', candidate) and
                                     blocks[j]["confidence"] > 0.9 and
                                     candidate not in excluded_terms and
+                                    DocumentStrategy._is_plausible_person_name(candidate, forbidden_name_tokens) and
                                     candidate != nom_value):
                                     extracted['prenom'] = {
                                         "value": candidate,
@@ -1084,6 +1347,7 @@ class DocumentStrategy:
                     if (re.match(r'^[A-Z]{4,20}$', text) and
                         block["confidence"] > 0.95 and
                         text not in excluded_terms and
+                        DocumentStrategy._is_plausible_person_name(text, forbidden_name_tokens) and
                         text != extracted.get('nom', {}).get('value')):
                         
                         if text not in ['CANADA', 'MOLDOVA', 'PASSPORT', 'PASSEPORT']:
@@ -1313,6 +1577,13 @@ class DocumentStrategy:
                         "confidence": 0.7,
                         "method": "derived_from_expiration"
                     }
+
+        # Nettoyage final anti-bruit OCR/MRZ pour nom/prénom.
+        for name_field in ("nom", "prenom"):
+            if name_field in extracted:
+                name_value = str(extracted[name_field].get("value", ""))
+                if not DocumentStrategy._is_plausible_person_name(name_value, forbidden_name_tokens):
+                    extracted.pop(name_field, None)
         
         return extracted
 
@@ -1533,14 +1804,15 @@ class DocumentStrategy:
             "REPUBLIQUE", "MALI", "SENEGAL", "COTE", "IVOIRE", "CARTE", "IDENTITE", "CEDEAO",
             "PASSPORT", "PASSEPORT", "NINA", "DATE", "NAISSANCE", "EXPIRATION", "DELIVRANCE",
             "NATIONALITE", "SEXE", "SEX", "MALIENNE", "MALIEN", "RUOF",
-            "GUINEE", "GUINEENNE", "GUINEEN", "ECOWAS", "IDENTITY", "CARD"
+            "GUINEE", "GUINEENNE", "GUINEEN", "ECOWAS", "IDENTITY", "CARD",
+            "CONAKRY", "CODEPAYS", "TEINT", "CHEVEUX", "LIEUDEDELIVRANCE", "LIEUNAISSANCE"
         }
 
         surname_labels = [
             "NOM", "SURNAME", "SUMAME", "LASTNAME", "FAMILYNAME", "NOMS"
         ]
         given_labels = [
-            "PRENOM", "PRENOMS", "FIRSTNAME", "GIVENNAME", "GIVENNAMES"
+            "PRENOM", "PRENOMS", "PREHOM", "FIRSTNAME", "FIRSTNEN", "GIVENNAME", "GIVENNAMES"
         ]
         id_labels = [
             "NUMEROIDENTITE", "IDNUMBER", "IDENTITYNUMBER", "NUMERODIDENTITE", "NUMBER"
@@ -1555,7 +1827,30 @@ class DocumentStrategy:
             upper = (word or "").upper().strip()
             if not upper:
                 return True
-            if any(token in upper for token in ["IDENTITE", "CARTE", "REPUBLIQUE", "CEDEAO", "PASSPORT"]):
+            if any(token in upper for token in [
+                "IDENTITE", "CARTE", "REPUBLIQUE", "CEDEAO", "PASSPORT",
+                "DATE", "BIRTH", "NAISSANCE", "EXPIR", "DELIVR", "ISSU",
+                "TAILLE", "HEIGHT", "PLACE", "LIEU", "SEXE", "SEX", "NATIONAL",
+                "CONAKRY", "CODEPAYS", "TEINT", "CHEVEUX"
+            ]):
+                return True
+            # Labels OCR fusionnés fréquents: NOMDSUMAI, PRENOMFIRSTNAME, etc.
+            compact = re.sub(r"[^A-Z0-9]", "", upper)
+            if (
+                compact.startswith("NOM")
+                or compact.startswith("PRENOM")
+                or "FIRSTNAME" in compact
+                or "FIRSTNEN" in compact
+                or "GIVENNAME" in compact
+                or "SURNAME" in compact
+                or "SUMAME" in compact
+                or "SUMARI" in compact
+                or "SUMAI" in compact
+                or "PREHOM" in compact
+                or "NUMERODIDENTITE" in compact
+                or compact.startswith("REPUBL")
+                or compact.startswith("REPUBLIC")
+            ):
                 return True
             return upper in excluded_terms
 
@@ -1566,6 +1861,11 @@ class DocumentStrategy:
             if not re.match(r'^[A-Z][A-Z\-\' ]+$', upper):
                 return False
             if re.search(r'\d', upper):
+                return False
+            if any(fragment in re.sub(r"[^A-Z]", "", upper) for fragment in [
+                "NOM", "PRENOM", "PREHOM", "FIRSTNEN", "FIRSTNAME",
+                "SUMAME", "SUMARI", "SUMAI", "NATIONALITE", "IDENTITE"
+            ]):
                 return False
             return not is_label_like(upper)
 
@@ -1644,18 +1944,18 @@ class DocumentStrategy:
                 word1 = blocks[i]["text"].strip().upper()
                 word2 = blocks[i + 1]["text"].strip().upper()
                 if is_name_candidate(word1) and is_name_candidate(word2):
-                    # Heuristique simple: mot le plus long = prenom, plus court = nom.
-                    prenom, nom = (word1, word2) if len(word1) >= len(word2) else (word2, word1)
+                    # Ordre lecture/document: nom puis prénom pour éviter les inversions.
+                    nom, prenom = word1, word2
                     if 'prenom' not in extracted:
                         extracted['prenom'] = {
                             "value": prenom,
-                            "confidence": round(float(blocks[i].get("confidence", 0.8)), 2),
+                            "confidence": round(float(blocks[i + 1].get("confidence", 0.8)), 2),
                             "method": "sequential_uppercase"
                         }
                     if 'nom' not in extracted:
                         extracted['nom'] = {
                             "value": nom,
-                            "confidence": round(float(blocks[i + 1].get("confidence", 0.8)), 2),
+                            "confidence": round(float(blocks[i].get("confidence", 0.8)), 2),
                             "method": "sequential_uppercase"
                         }
                     if 'prenom' in extracted and 'nom' in extracted:
@@ -1678,20 +1978,15 @@ class DocumentStrategy:
                     if nom_candidate:
                         extracted['nom'] = {"value": nom_candidate[0], "confidence": round(nom_candidate[1], 2), "method": "fallback_uppercase"}
         
-        # Dates avec tri chronologique
-        for line in lines:
-            date_match = re.search(r'\b(\d{2})/(\d{2})/(\d{4})\b', line)
-            if date_match:
-                day, month, year = date_match.groups()
-                try:
-                    from datetime import datetime
-                    date_obj = datetime(int(year), int(month), int(day))
-                    dates_found.append({
-                        "value": f"{day}/{month}/{year}",
-                        "date_obj": date_obj
-                    })
-                except:
-                    pass
+        # Dates avec tri chronologique en reutilisant l'extracteur robuste.
+        for match in DocumentStrategy._extract_all_dates(blocks):
+            value = match.get("value", "")
+            date_obj = DocumentStrategy._parse_ddmmyyyy(value)
+            if date_obj:
+                dates_found.append({
+                    "value": value,
+                    "date_obj": date_obj
+                })
         
         if dates_found:
             dates_found.sort(key=lambda x: x["date_obj"])
@@ -1798,7 +2093,8 @@ class DocumentStrategy:
             if num_match and 'numero_principal' not in extracted:
                 if not re.search(r'\d{2}/\d{2}', line):  # Exclure dates
                     numero = num_match.group().strip().upper()
-                    if not is_label_like(numero):
+                    # Éviter les faux "numéros" purement textuels issus des en-têtes OCR.
+                    if not is_label_like(numero) and re.search(r'\d', numero):
                         extracted['numero_principal'] = {"value": numero, "confidence": 0.75, "method": "regex_alphanum"}
                     break
 

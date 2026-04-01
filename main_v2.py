@@ -957,6 +957,110 @@ async def ocr_only_sync(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
 
 
+@app.post("/ocr-only-pair")
+async def ocr_only_pair(
+    recto_file: Union[UploadFile, str, None] = File(default=None),
+    verso_file: Union[UploadFile, str, None] = File(default=None),
+    ocr_lang: Optional[str] = Form(default="fr")
+):
+    """OCR texte uniquement pour recto + verso optionnel (retourne juste les dates OCR détectées)"""
+    start_time = time.time()
+    
+    try:
+        # Normaliser recto_file
+        if isinstance(recto_file, str):
+            if recto_file.strip() == '':
+                recto_file = None
+            else:
+                raise HTTPException(status_code=400, detail="'recto_file' doit être un fichier image")
+        
+        # Normaliser verso_file
+        if isinstance(verso_file, str):
+            if verso_file.strip() == '':
+                verso_file = None
+            else:
+                raise HTTPException(status_code=400, detail="'verso_file' doit être un fichier image")
+        elif verso_file and (not verso_file.filename or verso_file.filename.strip() == ''):
+            verso_file = None
+        
+        # Validation: au moins recto_file requise
+        if not recto_file:
+            raise HTTPException(status_code=400, detail="'recto_file' est requise")
+        
+        allowed_types = ['image/jpeg', 'image/png', 'image/webp', 'image/bmp', 'image/tiff', 'image/jpg']
+        
+        # Préparer les images
+        images_to_process = []
+        filenames_list = []
+        
+        # Recto
+        if recto_file.content_type.lower() not in allowed_types:
+            raise HTTPException(status_code=400, detail=f"Type fichier recto non supporté: {recto_file.content_type}")
+        recto_bytes = await recto_file.read()
+        if not recto_bytes:
+            raise HTTPException(status_code=400, detail="Fichier recto vide")
+        images_to_process.append(recto_bytes)
+        filenames_list.append(recto_file.filename or "recto.jpg")
+        
+        # Verso (optionnel)
+        verso_bytes = None
+        if verso_file:
+            if verso_file.content_type.lower() not in allowed_types:
+                raise HTTPException(status_code=400, detail=f"Type fichier verso non supporté: {verso_file.content_type}")
+            verso_bytes = await verso_file.read()
+            if verso_bytes:
+                images_to_process.append(verso_bytes)
+                filenames_list.append(verso_file.filename or "verso.jpg")
+        
+        logger.info(f"🔍 OCR pair - Images: {filenames_list}")
+        
+        # Process recto
+        recto_result = id_processor.process_ocr_only(recto_bytes, ocr_lang)
+        if not recto_result.get("success", False):
+            raise HTTPException(status_code=500, detail=recto_result.get("error", "Erreur OCR recto"))
+        
+        # Process verso si existe
+        verso_result = None
+        if verso_bytes:
+            verso_result = id_processor.process_ocr_only(verso_bytes, ocr_lang)
+            if not verso_result.get("success", False):
+                logger.warning(f"⚠️ Erreur OCR verso: {verso_result.get('error', 'Unknown error')}")
+        
+        # Extraire juste les dates détectées
+        recto_dates = recto_result.get("dates", [])
+        verso_dates = verso_result.get("dates", []) if verso_result else []
+        all_dates = recto_dates + verso_dates
+        
+        result = {
+            "success": True,
+            "total_processing_time": round(time.time() - start_time, 2),
+            "filenames": filenames_list,
+            "recto": {
+                "filename": filenames_list[0],
+                "dates_found": recto_dates,
+                "text_blocks": recto_result.get("text_blocks", []),
+                "total_blocks": recto_result.get("total_blocks", 0)
+            },
+            "verso": {
+                "filename": filenames_list[1] if len(filenames_list) > 1 else None,
+                "dates_found": verso_dates,
+                "text_blocks": verso_result.get("text_blocks", []) if verso_result else [],
+                "total_blocks": verso_result.get("total_blocks", 0) if verso_result else 0
+            } if verso_result else None,
+            "all_dates_found": all_dates,
+            "total_blocks": recto_result.get("total_blocks", 0) + (verso_result.get("total_blocks", 0) if verso_result else 0)
+        }
+        
+        logger.info(f"✅ OCR pair terminé - Dates trouvées: {all_dates}")
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Erreur OCR pair: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Erreur: {str(e)}")
+
+
 @app.post("/extract-batch")
 async def extract_batch(files: List[UploadFile] = File(...)):
     """Traitement batch"""

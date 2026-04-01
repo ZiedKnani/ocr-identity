@@ -1,0 +1,64 @@
+version: '3.8'
+
+# Configuration Docker Compose PRODUCTION
+# Utilise l'image optimisée pushée sur Docker Hub (sans fichiers test, CSV, JSON)
+# Pour développement local, utilisez docker-compose.yml au lieu de ce fichier
+
+services:
+  # Service OCR principal - Version optimisée avec Docker Hub
+  ocr-api:
+    # ⭐ IMPORTANT: Utilise l'image pushée (pas de build local)
+    image: zied2711/ocr-identity-extractor:2.0.5-slim
+    container_name: ocr-identity-api
+    restart: unless-stopped
+    
+    ports:
+      - "8000:8000"  # API Endpoint
+    
+    environment:
+      # Configuration Python
+      - PYTHONUNBUFFERED=1
+      
+      # Configuration de l'application
+      - LOG_LEVEL=INFO
+      - MAX_WORKERS=4
+      - OCR_LANGUAGE=fr
+      - SMB_USERNAME=${SMB_USERNAME:-}
+      - SMB_PASSWORD=${SMB_PASSWORD:-}
+      - SMB_DOMAIN=${SMB_DOMAIN:-}
+    
+    volumes:
+      # Volume pour les logs
+      - ./logs:/app/logs
+      
+      # Volume pour le cache des modèles PaddleOCR
+      - paddle-models:/home/ocruser/.paddleocr
+    
+    networks:
+      - ocr-network
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 300s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+      disable: false
+    
+    # Limites de ressources
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+
+volumes:
+  paddle-models:
+    driver: local
+
+networks:
+  ocr-network:
+    driver: bridge

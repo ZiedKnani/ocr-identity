@@ -7,6 +7,7 @@ __pycache__/
 env/
 venv/
 ENV/
+.venv/
 build/
 develop-eggs/
 dist/
@@ -22,31 +23,150 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.pyc
+*.pyo
+*.pyd
 
-# Tests
+# Tests & Experiments (ne pas tracker)
 .pytest_cache/
 .coverage
 htmlcov/
 .tox/
 .hypothesis/
+test_*.py
+*_test.py
+batch_test_*.py
+quick_test_*.py
+audit_ocr_only_dates.py
+check_service.py
+test_mrz_improvements.py
+test_redeploy.py
 
-# IDE
-.vscode/
-.idea/
-*.swp
+# Test Data & Comparison Files
+test_images/
+test-docker.sh
+response.json
+
+# Batch Results & Analysis Files
+batch_results_*.csv
+batch_results_*.jsonl
+batch_vs_ocr_fulltext_*.csv
+batch_results_random_*.csv
+batch_results_random_*.jsonl
+comparison_ocr_vs_batch_*.csv
+comparison_ocr_vs_batch_*.jsonl
+date_recovery_after_patch.*
+ocr_only_date_audit_*.json
+sanity_one.*
+
+# Utility & Data Generation Scripts
+generate_batch_vs_ocr_fulltext.py
+enrich_doc_type_from_fulltext.py
+compare_ocr_vs_batch.py
+
+# Logs & Temporary Files
+logs/
+*.log
+temp/
+.tmp/
 *.swo
 *~
 .DS_Store
+.sublime-project
+.sublime-workspace
 
-# Logs
+# Logs et cache
 logs/
 *.log
 tmp/
 temp/
+build.log
+__pycache__
+.cache/
+.pytest_cache/
 
-# Environment
+# Résultats et données générées (NE PAS TRACKER)
+*.csv           # Fichiers de résultats
+*.jsonl         # Fichiers JSONL
+batch_results*.csv
+batch_results*.jsonl
+ocr_only_date_audit*.json
+response.json
+oracle_extraction_updated.sql
+test_oracle_request.sql
+
+# Environment et configuration locale
 .env
 .env.local
+.env.*.local
+
+# Fichiers de déploiement localhost
+docker-compose.yml
+!docker-compose.prod.yml  # Garder la version prod
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# IDE spécific
+.project
+.pydevproject
+.sublime-project
+.sublime-workspace
+*.iml
+*.iws
+*.ipr
+
+# Documentation locale (sauf README et DOCKER_OPTIMIZATION)
+docs/
+DETAILED_CHANGES.md
+DOCUMENTATION_*.md
+GUIDE_*.md
+IMPROVEMENTS_SUMMARY.md
+INSTRUCTIONS.md
+RUNBOOK_PRODUCTION.md
+SYNTHESE_2PAGES.md
+TESTING_GUIDE.md
+BUILD_STATUS.md
+DOCKER_GUIDE.md
+SOLUTION_DATE_EXTRACTION.md
+
+# Scripts auxiliaires
+Makefile
+scripts/
+get-docker.sh
+nginx.conf
+
+# Dépendances Node (si présentes)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Builds et artifacts
+*.o
+*.a
+*.lib
+*.so
+*.exe
+*.dll
+
+# Fichiers temporaires
+*.tmp
+*.bak
+*.swp
+*.swo
+~ 
+/tmp/
+
+# VSCode
+.vscode/settings.json
+.vscode/launch.json
+.vscode/extensions.json
+
+# Python
+pip-log.txt
+pip-delete-this-directory.txt
+
 
 # PaddleOCR cache
 .paddleocr/

@@ -1,287 +1,359 @@
-# 🚀 OCR Identity Extractor V2
+# 🎫 OCR Identity Extractor v2
 
-Service d'extraction OCR pour documents d'identité (CIN et Passeports) avec **architecture améliorée**.
+> **Extraction intelligente de données d'identité à partir de documents OCR**
 
-## ✨ Améliorations V2
+Plateforme automatisée pour extraire et labelliser des informations personnelles (nom, dates, numéro de pièce) de documents d'identité scannés via OCR avec haute précision.
 
-### Architecture
+---
 
-- ✅ **Strategy Pattern** : Une stratégie d'extraction par type de document
-- ✅ **Preprocessing adaptatif** : Traitement d'image personnalisé selon le type
-- ✅ **Détection MRZ** : Parsing complet pour passeports biométriques
-- ✅ **Validation pondérée** : Scoring par importance des champs
+## ✨ Fonctionnalités
 
-### Documents Supportés
+### 🔍 **Extraction Multi-Document**
+- **Passeports** : Extraction MRZ + récupération de noms et dates
+- **Cartes d'Identité (CIN)** : Détection de zones, parsing de structures
+- **Documents génériques** : Fallback intelligent pour formats non-standard
 
-- 🇲🇱 **CIN Mali (NINA)** : Format 12 chiffres, gestion fond coloré
-- 🇸🇳 **CIN Sénégal** : Format 13 chiffres, gestion plastification
-- 🇨🇮 **CIN Côte d'Ivoire** : 2 lettres + 10-12 chiffres
-- 🌍 **Passeports Biométriques** : MRZ parsing complet
-- 🌍 **Passeports CEDEAO** : Support multi-pays
+### 📅 **Extraction de Dates Robuste**
+- Support de **15+ formats** de dates (DD/MM/YYYY, DDMMYYYY, DD/MMY, compacts, etc.)
+- **Gestion des variantes OCR** : A0UT→AOUT, 0CT→OCT, années 2 chiffres (00-29→2000-2029)
+- **Validation chronologique** : date_naissance ≤ date_delivrance ≤ date_expiration
+
+### 👤 **Validation Intelligente de Noms**
+- Rejet automatique des artefacts OCR (strings alphanumérique, marqueurs MRZ)
+- 4 niveaux de filtrage : longueur, caractères, tokens interdits, ratio alphabétique
+- Reconnaissance multilingue (français, anglais, caractères spéciaux)
+
+### 🎯 **API FastAPI**
+- Endpoints REST simples et documentés
+- Support upload d'images ou envoi de texte OCR brut
+- Réponses JSON structurées
+
+---
+
+## 🚀 Démarrage Rapide
+
+### Avec Docker (recommandé)
+
+```bash
+# 1. Cloner le repo
+git clone https://github.com/ZiedKnani/ocr-identity.git
+cd ocr-identity
+
+# 2. Lancer l'image Docker
+docker-compose up -d
+
+# 3. Vérifier que le service tourne
+curl http://localhost:8000/health
+
+# 4. Encoder une image en base64
+python -c "import base64; print(base64.b64encode(open('test_images/sample.jpg', 'rb').read()).decode())" > img_b64.txt
+
+# 5. Envoyer une requête
+curl -X POST http://localhost:8000/extract \
+  -H "Content-Type: application/json" \
+  -d '{
+    "ocr_text": "REPUBLIQUE DE GUINEE PASSEPORT...",
+    "document_type": "PASSPORT"
+  }'
+```
+
+### Localement (dev)
+
+```bash
+# 1. Setup environment
+python -m venv .venv
+source .venv/Scripts/Activate  # Windows
+source .venv/bin/activate       # Linux/Mac
+
+# 2. Install dependencies
+pip install -r requirements.txt
+python -m spacy download fr_core_news_sm  # Pour NLP
+
+# 3. Run API
+python main_v2.py
+
+# 4. Test
+curl http://localhost:8000/health
+```
+
+---
+
+## 📊 Architecture
+
+```
+┌──────────────────────────────────────┐
+│         FastAPI Server               │
+│      (main_v2.py → 8000)             │
+└──────────────────┬───────────────────┘
+                   │
+    ┌──────────────┼──────────────┬──────────────┐
+    ▼              ▼              ▼              ▼
+┌─────────┐  ┌──────────┐  ┌──────────────┐  ┌───────────┐
+│  OCR    │  │  Doc     │  │  MRZ         │  │ Document  │
+│ Processor│  │ Detector │  │ Parser       │  │ Strategy  │
+└────┬────┘  └────┬─────┘  └──────┬───────┘  └─────┬─────┘
+     │            │               │               │
+     └────────────┴───────────────┴───────────────┘
+                   │
+      ┌────────────┼────────────┐
+      ▼            ▼            ▼
+  ┌────────┐  ┌──────────┐  ┌──────────────┐
+  │ Names  │  │ Dates    │  │ ID Numbers   │
+  │ (NER)  │  │ (Regex)  │  │ (Pattern)    │
+  └────┬───┘  └────┬─────┘  └──────┬───────┘
+       │           │               │
+       └───────────┴───────────────┘
+               │
+               ▼
+          ┌─────────────┐
+          │ Validation  │
+          │ + Fallback  │
+          └──────┬──────┘
+                 │
+                 ▼
+          ┌─────────────┐
+          │ JSON Result │
+          └─────────────┘
+```
+
+---
 
 ## 📁 Structure du Projet
 
 ```
 ocr-identity-v2/
-├── document_types.py          # Définitions types et règles de validation
-├── document_detector.py       # Détection intelligente du type
-├── document_strategy.py       # Stratégies d'extraction par type
-├── ocr_processor.py          # OCR avec preprocessing adaptatif
-├── validator.py              # Validation pondérée des champs
-├── id_processor_v2.py        # Processeur principal refactorisé
-├── main_v2.py                # API FastAPI
-└── requirements.txt          # Dépendances
+├── main_v2.py                      # Point d'entrée API FastAPI
+├── document_strategy.py             # 🔑 Extraction multi-type (core)
+├── document_types.py                # Énumération des types
+├── document_detector.py             # Détection du type de document
+├── mrz_parser.py                    # Parsing MRZ (Machine Readable Zone)
+├── ocr_processor.py                 # Pipeline PaddleOCR
+├── id_processor_v2.py               # Traitement IDs génériques
+├── validator.py                     # Validation des données
+├── cin_layouts.py                   # Layouts CIN pour parsing
+│
+├── Dockerfile                       # Image Docker
+├── docker-compose.yml               # Config prod/dev
+├── requirements.txt                 # Dépendances Python
+│
+├── test_images/                     # Images d'exemple
+├── logs/                            # Logs de l'application
+│
+└── docs/                            # Documentation
 ```
 
-## 🔧 Installation
+---
 
-### 1. Créer un environnement virtuel
+## 🔧 Configuration
 
-```bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# OU
-venv\Scripts\activate  # Windows
+### Variables d'Environnement
+
+```env
+# .env
+LOG_LEVEL=INFO                       # DEBUG, INFO, WARNING
+MAX_WORKERS=4                        # Workers pour traitement parallèle
+OCR_LANGUAGE=fr                      # Langue OCR (fr, en, etc.)
+PYTHONUNBUFFERED=1                   # Logs en temps réel
 ```
 
-### 2. Installer les dépendances
+### Docker Compose
 
-```bash
-pip install -r requirements.txt
+```yaml
+# docker-compose.yml
+services:
+  ocr-api:
+    image: your-username/ocr-identity:2.0.0
+    ports:
+      - "8000:8000"
+    environment:
+      LOG_LEVEL: INFO
+      MAX_WORKERS: 4
+    volumes:
+      - ./logs:/app/logs
+      - ./test_images:/app/test_images:ro
 ```
 
-### 3. Lancer le serveur
+---
 
-```bash
-python main_v2.py
-```
+## 📡 API Endpoints
 
-Le serveur démarre sur `http://localhost:8000`
+### `POST /extract`
 
-Documentation interactive : `http://localhost:8000/docs`
+Extrait les données d'une image ou texte OCR.
 
-## 🎯 Utilisation
-
-### Extraction par chemin réseau (machine distante)
-
-Le endpoint POST /extract-identity-path accepte un chemin local ou réseau.
-
-Pour un déploiement Docker sur une autre machine:
-
-1. Le service peut lire directement un chemin UNC SMB (\\serveur\partage\...).
-2. Si le partage demande une authentification, fournir les variables SMB_USERNAME / SMB_PASSWORD / SMB_DOMAIN.
-
-Exemple Linux (hôte):
-
-- Lancer les services (avec credentials SMB):
-  SMB_USERNAME=<user> SMB_PASSWORD=<password> SMB_DOMAIN=<domain> docker compose up -d --build
-
-Exemple Windows (hôte / PowerShell):
-
-- Lancer les services (avec credentials SMB):
-  $env:SMB_USERNAME='<user>'; $env:SMB_PASSWORD='<password>'; $env:SMB_DOMAIN='<domain>'; docker compose up -d --build
-
-Exemple requête JSON:
-
-{
-"documentPath": "\\\\192.9.200.89\\c$\\DocIBANK\\PER\\PER-1045\\DOC\\IMG\\PER11000D0000001045P1.jpg",
-"autoPair": true
-}
-
-Si le fichier est introuvable, la réponse 404 inclut checked_paths et un hint pour le montage réseau.
-
-### 1. Extraction Automatique
-
-```bash
-curl -X POST "http://localhost:8000/extract-identity" \
-  -F "file=@mon_document.jpg"
-```
-
-**Réponse :**
-
+**Request:**
 ```json
 {
-  "success": true,
-  "document": {
-    "type": "CIN_MALI",
-    "description": "Carte NINA (Mali)",
-    "detection_confidence": 0.95
-  },
-  "extracted_data": {
-    "numero": {
-      "value": "123456789012",
-      "confidence": 0.98,
-      "method": "nina_pattern"
-    },
-    "nom": {
-      "value": "TRAORE",
-      "confidence": 0.95,
-      "method": "uppercase_detection"
-    },
-    "prenom": {
-      "value": "Amadou",
-      "confidence": 0.93,
-      "method": "capitalized_detection"
-    },
-    "date_naissance": {
-      "value": "15/03/1990",
-      "confidence": 0.97,
-      "method": "date_detection"
-    }
-  },
-  "validation": {
-    "is_valid": true,
-    "global_score": 0.92,
-    "fields_found_required": ["numero", "nom", "prenom", "date_naissance"],
-    "fields_missing_required": []
-  }
+  "ocr_text": "REPUBLIQUE DE GUINEE PASSEPORT...",
+  "document_type": "PASSPORT",
+  "confidence_threshold": 0.65
 }
 ```
 
-### 2. OCR Simple (sans extraction)
-
-```bash
-curl -X POST "http://localhost:8000/ocr-only" \
-  -F "file=@mon_document.jpg"
-```
-
-### 3. Traitement Batch
-
-```bash
-curl -X POST "http://localhost:8000/extract-batch" \
-  -F "files=@doc1.jpg" \
-  -F "files=@doc2.jpg" \
-  -F "files=@doc3.jpg"
-```
-
-### 4. Types Supportés
-
-```bash
-curl "http://localhost:8000/supported-types"
-```
-
-## 🧩 Architecture Technique
-
-### Pattern Strategy
-
-Chaque type de document a sa propre stratégie d'extraction :
-
-```python
-# Exemple : CIN Mali
-class CINMaliStrategy(DocumentStrategy):
-    def extract_fields(self, blocks):
-        # 1. Détecter NINA (XXX XXX XXX XXX)
-        # 2. Extraire nom/prénom en majuscules
-        # 3. Trouver dates par ordre chronologique
-        # 4. Labels contextuels (père, mère, profession)
-        return extracted_data
-```
-
-### Preprocessing Adaptatif
-
-```python
-# Passeports : Focus MRZ, deskew
-image = enhance_for_passport(image)
-
-# CIN Mali : Gérer fond coloré
-image = enhance_for_cin_mali(image)
-
-# CIN Sénégal : Supprimer reflets plastification
-image = enhance_for_cin_senegal(image)
-```
-
-### Validation Pondérée
-
-Les champs importants ont plus de poids dans le score :
-
-```python
-FIELD_WEIGHTS = {
-    "numero": 3.0,        # Très important
-    "nom": 2.5,
-    "prenom": 2.5,
-    "date_naissance": 2.0,
-    "profession": 0.8,    # Moins important
-    "pere": 0.5
+**Response:**
+```json
+{
+  "case_id": "PER1001D000000001",
+  "document_type": "PASSPORT",
+  "numero_id": {
+    "value": "000123456",
+    "confidence": 0.95
+  },
+  "nom": {
+    "value": "DIALLO",
+    "confidence": 0.90
+  },
+  "prenom": {
+    "value": "AMADOU",
+    "confidence": 0.88
+  },
+  "date_naissance": {
+    "value": "1992-05-15",
+    "confidence": 0.92
+  },
+  "date_delivrance": {
+    "value": "2020-03-10",
+    "confidence": 0.95
+  },
+  "date_expiration": {
+    "value": "2030-03-10",
+    "confidence": 0.95
+  },
+  "extraction_status": "SUCCESS",
+  "errors": []
 }
 ```
 
-## 📊 Performances
+### `GET /health`
 
-### Avant V2 (V1)
+Vérifie que le service est opérationnel.
 
-- CIN Mali : ~60% précision
-- Passeports : ~50% précision (sans MRZ)
-- Temps : 2-3 secondes
+**Response:**
+```json
+{
+  "status": "OK",
+  "timestamp": "2026-04-01T10:30:00Z"
+}
+```
 
-### Après V2
+---
 
-- CIN Mali : **~95% précision** (+35%)
-- Passeports avec MRZ : **~98% précision** (+48%)
-- CIN Sénégal : **~90% précision**
-- Temps : 1.5-2.5 secondes
+## 🎯 Formats Supportés
 
-## 🔮 Évolutions Futures
+### Dates Extraites
 
-1. **Multi-OCR Ensemble** : Combiner PaddleOCR + Tesseract + EasyOCR
-2. **Plus de pays** : Burkina Faso, Guinée, Niger, etc.
-3. **Machine Learning** : Classifier les types de documents
-4. **Cache intelligent** : Mémoriser les stratégies qui fonctionnent bien
-5. **API streaming** : Retour progressif des résultats
+| Format | Exemple | Détection |
+|--------|---------|-----------|
+| Standard | 15/05/1992 | ✅ |
+| Compact | 15051992 | ✅ |
+| Texte | 15 MAI 1992 | ✅ |
+| Texte court | 15 MAY 92 | ✅ |
+| Noisy OCR | 15/051992 | ✅ |
+| Month abbr | 15MAY1992 | ✅ |
+| 2-digit year | 15/05/92 | ✅ → 1992 |
+
+### Noms & Prénoms
+
+- Caractères latins + accents (é, è, ê, à, ç, etc.)
+- Caractères spéciaux autorisés : `-`, `'`, ` ` (tiret, apostrophe, espace)
+- Rejet automatique : nombres, MRZ markers (`<`, `/`), tokens non-nominaux
+
+---
+
+## 🧪 Tests
+
+```bash
+# Extraction simple
+python -c "
+from document_strategy import DocumentStrategy
+text = open('test_images/sample_ocr.txt').read()
+result = DocumentStrategy._extract_passport([{'id': 1, 'text': text, 'confidence': 0.95}])
+print(result)
+"
+
+# Test API
+python test_api.py
+```
+
+---
+
+## 📈 Améliorations Apportées
+
+### v2.0 (Current)
+- ✅ Date extraction robuste (15+ formats)
+- ✅ OCR noise handling (A0UT → AOUT)
+- ✅ 2-digit year normalization
+- ✅ Name validation avec 4 niveaux de filtrage
+- ✅ Chronological date assignment
+- ✅ FastAPI async endpoints
+
+### Roadmap v2.1
+- 🔄 spaCy NLP fallback pour noms non-détectés
+- 🔄 GLiNER pour extraction DATE/PERSON améliorée
+- 🔄 Ollama local LLM pour cas extrêmes
+- 🔄 Dashboard web pour monitoring
+
+---
 
 ## 🐛 Troubleshooting
 
-### Erreur "No module named 'paddleocr'"
+| Problème | Solution |
+|----------|----------|
+| `Module not found: spacy` | `pip install -r requirements.txt` |
+| PORT 8000 already in use | `docker-compose down` puis restart |
+| PaddleOCR downloads slowly | Normal (modèles ~500MB), usage cache après |
+| Dates not extracted | Vérifiez le format OCR (regex patterns) |
+| Noms vides malgré OCR | Validation trop stricte, voir `_is_plausible_person_name()` |
 
-```bash
-pip install paddleocr==2.7.0.3
-```
-
-### Erreur OpenCV
-
-```bash
-pip install opencv-python==4.8.1.78
-```
-
-### MRZ non détectée
-
-- Vérifier que l'image du passeport est bien alignée
-- Augmenter la résolution de l'image
-- Utiliser preprocessing manuel si nécessaire
-
-### Score de validation faible
-
-- Vérifier la qualité de l'image (résolution, netteté)
-- S'assurer que le document est bien éclairé
-- Éviter les reflets et ombres
-
-## 📝 Logs
-
-Le système log toutes les étapes importantes :
-
-```
-2025-02-12 10:30:15 - INFO - 🔍 Étape 1: OCR initial...
-2025-02-12 10:30:16 - INFO - 📝 45 blocs OCR détectés
-2025-02-12 10:30:16 - INFO - 🔍 Étape 2: Détection du type...
-2025-02-12 10:30:16 - INFO - 📄 Type détecté: Carte NINA (Mali) (confiance: 0.95)
-2025-02-12 10:30:16 - INFO - 🔍 Étape 3: Re-OCR avec preprocessing adaptatif...
-2025-02-12 10:30:17 - INFO - ✅ NINA détecté: 123456789012
-2025-02-12 10:30:17 - INFO - ✅ Nom détecté: TRAORE
-2025-02-12 10:30:17 - INFO - ✅ Traitement terminé: CIN_MALI - Score global: 0.92
-```
+---
 
 ## 🤝 Contribution
 
-Pour ajouter un nouveau type de document :
+Les contributions sont bienvenues!
 
-1. Ajouter le type dans `document_types.py`
-2. Créer une stratégie dans `document_strategy.py`
-3. Ajouter les mots-clés de détection dans `document_types.py`
-4. Optionnel : Ajouter preprocessing spécifique dans `ocr_processor.py`
+```bash
+# 1. Fork the repo
+# 2. Create feature branch
+git checkout -b feature/amazing-feature
 
-## 📄 Licence
+# 3. Commit changes
+git commit -m "Add amazing feature"
 
-MIT License - Libre d'utilisation
+# 4. Push to branch
+git push origin feature/amazing-feature
 
-## 👨‍💻 Auteur
+# 5. Open Pull Request
+```
 
-Développé avec ❤️ en utilisant le **paradigme Orienté Objet** avec **Strategy Pattern**
+---
+
+## ⚖️ License
+
+MIT License - Voir [LICENSE](LICENSE) pour détails.
+
+---
+
+## 📧 Support
+
+**Questions? Issues?**
+- 📌 Ouvrir une [GitHub Issue](https://github.com/ZiedKnani/ocr-identity/issues)
+- 💬 Discussions: [GitHub Discussions](https://github.com/ZiedKnani/ocr-identity/discussions)
+
+---
+
+## 🎓 Références Techniques
+
+- **PaddleOCR**: https://github.com/PaddlePaddle/PaddleOCR
+- **FastAPI**: https://fastapi.tiangolo.com/
+- **MRZ Parser**: ISO/IEC 7501-1 standard
+- **spaCy NER**: https://spacy.io/
+
+---
+
+<div align="center">
+
+**Fait avec ❤️ par l'équipe OCR Identity**
+
+[⬆ back to top](#-ocr-identity-extractor-v2)
+
+</div>

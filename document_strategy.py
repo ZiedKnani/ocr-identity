@@ -425,10 +425,15 @@ class DocumentStrategy:
                     year = int(year_raw)
                 _append_date(int(day), int(month_num), year, conf, block_id)
 
-            # Format MMYYYY ou MM/YYYY (utile pour dates délivrance/expiration)
-            for m in re.finditer(r'\b(0[1-9]|1[0-2])\s*/?\s*((?:19|20)\d{2})\b', text_upper_num):
-                month, year = m.groups()
-                _append_date(1, int(month), int(year), conf, block_id)
+            # Format MMYYYY ou MM/YYYY: limiter aux lignes avec contexte date explicite
+            # pour éviter les faux positifs (ex: fragments d'ID comme "022003").
+            date_context = any(token in text_upper_raw for token in [
+                "DATE", "EXPIR", "DELIVR", "EMISS", "ISSU", "BIRTH", "NAISS"
+            ])
+            if date_context:
+                for m in re.finditer(r'\b(0[1-9]|1[0-2])\s*/?\s*((?:19|20)\d{2})\b', text_upper_num):
+                    month, year = m.groups()
+                    _append_date(1, int(month), int(year), conf, block_id)
         
         # Trier par date chronologique
         if dates_found:
@@ -914,6 +919,18 @@ class DocumentStrategy:
                 extracted['date_expiration'] = {"value": dates_found[-1]["value"], "confidence": 0.8, "method": "regex_date"}
 
         # Extraction sexe (labels bruités possibles: Sexe/Ser + nationalité genrée)
+        if 'sexe' not in extracted:
+            # Priorité 1: valeur explicite M/F sur le document.
+            for block in blocks:
+                raw = (block.get("text", "") or "").upper()
+                if re.search(r'(?<![A-Z0-9])[MF](?![A-Z0-9])', raw):
+                    extracted['sexe'] = {
+                        "value": "M" if "M" in re.findall(r'(?<![A-Z0-9])[MF](?![A-Z0-9])', raw) else "F",
+                        "confidence": round(float(block.get("confidence", 0.0)), 2),
+                        "method": "explicit_mf"
+                    }
+                    break
+
         if 'sexe' not in extracted:
             for block in blocks:
                 sex_value = _extract_sex_value(block.get("text", ""))
@@ -2013,6 +2030,23 @@ class DocumentStrategy:
 
             # Sexe
             if 'sexe' not in extracted and any(lbl in label_text for lbl in sex_labels):
+                # Priorité explicite M/F dans la fenêtre du label.
+                explicit_found = False
+                for j in range(i, min(i + 4, len(blocks))):
+                    raw = (blocks[j].get("text", "") or "").upper()
+                    explicit = re.findall(r'(?<![A-Z0-9])[MF](?![A-Z0-9])', raw)
+                    if explicit:
+                        extracted['sexe'] = {
+                            "value": "M" if "M" in explicit else "F",
+                            "confidence": round(float(blocks[j].get("confidence", 0.0)), 2),
+                            "method": "context_label_explicit_mf"
+                        }
+                        explicit_found = True
+                        break
+
+                if explicit_found:
+                    continue
+
                 for j in range(i, min(i + 4, len(blocks))):
                     sex_value = _extract_sex_value(blocks[j].get("text", ""))
                     if sex_value:

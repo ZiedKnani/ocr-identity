@@ -56,7 +56,7 @@ app.add_middleware(
 
 
 def _sanitize_log_payload(data):
-    """Masque/tronque les payloads pour logs (éviter bruit et données sensibles)."""
+    """Masque les champs sensibles pour les logs sans tronquer la réponse."""
     if isinstance(data, dict):
         sanitized = {}
         for key, value in data.items():
@@ -71,8 +71,6 @@ def _sanitize_log_payload(data):
         return [_sanitize_log_payload(item) for item in data]
 
     if isinstance(data, str):
-        if len(data) > 300:
-            return f"{data[:300]}...<truncated len={len(data)}>"
         return data
 
     return data
@@ -83,8 +81,6 @@ def _debug_print_response(tag: str, payload: dict):
     try:
         safe_payload = _sanitize_log_payload(payload)
         text = json.dumps(safe_payload, ensure_ascii=False)
-        if len(text) > 5000:
-            text = f"{text[:5000]}...<truncated len={len(text)}>"
         print(f"[DEBUG_RESPONSE] {tag}: {text}")
         logger.info(f"[DEBUG_RESPONSE] {tag}: {text}")
     except Exception as e:
@@ -1507,6 +1503,14 @@ def _format_extracted_data(
             ordered_fields.append(field_name)
 
     formatted = {}
+
+    def _prune_location(location: dict) -> dict:
+        """Conserve uniquement l'indicateur booléen attendu/non-attendu."""
+        if not isinstance(location, dict):
+            return {}
+
+        return {"in_expected_zone": bool(location.get("in_expected_zone", False))}
+
     for field in ordered_fields:
         data = extracted_data.get(field)
         if isinstance(data, dict):
@@ -1516,7 +1520,7 @@ def _format_extracted_data(
                 "method": data.get("method", "unknown")
             }
             if "location" in data:
-                formatted[field]["location"] = data.get("location")
+                formatted[field]["location"] = _prune_location(data.get("location"))
         elif data is not None:
             formatted[field] = {
                 "value": data,

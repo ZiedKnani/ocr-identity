@@ -1,0 +1,23 @@
+{
+  "total_rows": 40,
+  "recoverable_cases": 14,
+  "recoverable_birth": 7,
+  "recoverable_issue": 14,
+  "recoverable_expiration": 9,
+  "by_doc": {
+    "02": {
+      "total": 17,
+      "recoverable_cases": 5,
+      "recoverable_birth": 3,
+      "recoverable_issue": 5,
+      "recoverable_expiration": 3
+    },
+    "01": {
+      "total": 23,
+      "recoverable_cases": 9,
+      "recoverable_birth": 4,
+      "recoverable_issue": 9,
+      "recoverable_expiration": 6
+    }
+  }
+}

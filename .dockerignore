@@ -1,53 +1,58 @@
-# .dockerignore - Exclure TOUS les fichiers non essentiels
+# .dockerignore - Exclure tous les fichiers non essentiels
 
-# TOUT PAR DÉFAUT (sauf les fichiers listés dans .gitignore)
-# ============================================================
+# Exclusions explicites - Données et résultats de test
+*.csv
+*.jsonl
+*.json
+batch_results*
+comparison_ocr*
+date_recovery*
+sanity_one*
+response*
 
-# Exclusions très larges
-**/
+# Scripts de test (ne pas copier dans l'image)
+check_service.py
+compare_ocr_vs_batch.py
+enrich_doc_type_from_fulltext.py
+generate_batch_vs_ocr_fulltext.py
+test_*.py
+*_test.py
+quick_test_*.py
+audit_*.py
 
-# Mais INCLURE les fichiers essentiels
-!main_v2.py
-!id_processor_v2.py
-!document_strategy.py
-!document_types.py
-!document_detector.py
-!ocr_processor.py
-!validator.py
-!mrz_parser.py
-!cin_layouts.py
-!requirements.txt
-!Dockerfile
-!.dockerignore
-!README.md
-
-# Logs et cache
+# Répertoires de test et données
+test_images/
 logs/
+tests/
+scripts/
+
+# Python cache et environnement
 __pycache__/
 .pytest_cache/
 *.pyc
 *.pyo
 *.pyd
 .cache/
+.venv/
+venv/
 
-# Tests
-test_*.py
-*_test.py
-batch_test_*.py
-quick_test_*.py
-audit_ocr_only_dates.py
-check_service.py
-test_mrz_improvements.py
-test_redeploy.py
-test_images/
-test-docker.sh
+# Version control
+.git/
+.gitignore
+.github/
 
-# Résultats et données
-*.csv
-*.jsonl
-batch_results*.csv
-batch_results*.jsonl
-ocr_only_date_audit*.json
+# Éditeur et IDE
+.vscode/
+.env
+.env.example
+
+# Fichiers OS
+.DS_Store
+Thumbs.db
+
+# Docker compose de développement (garder le prod)
+docker-compose.yml
+docker-compose.override.yml
 response.json
 oracle_extraction_updated.sql
 test_oracle_request.sql
